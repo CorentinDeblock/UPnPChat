@@ -1,9 +1,11 @@
-﻿using System;
+﻿using Microsoft.VisualBasic;
+using System;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 
 namespace UPnPChat
 {
@@ -42,30 +44,59 @@ namespace UPnPChat
             {
                 if(port != null)
                 {
+                    SocketConnection connection = new SocketConnection(int.Parse(port));
+
                     if(type != null)
                     {
                         if(type == "1")
                         {
-                            StartClient(int.Parse(port));
+                            StartClient(connection);
                         } else if(type == "2")
                         {
-                            StartServer(int.Parse(port));
+                            StartServer(connection);
                         }
                     }
-                }
 
-                Console.WriteLine("Press any keys to continue...");
-                Console.ReadKey();
+                    // Release the socket.
+                    connection.socket.Shutdown(SocketShutdown.Both);
+                    connection.socket.Close();
+                }
             }catch (Exception ex)
             {
                 Console.WriteLine(ex.ToString());
             }
         }
 
-        private static void StartServer(int port)
+        private static void Interaction(Socket socket)
         {
-            SocketConnection listener = new SocketConnection(port);
-            
+            while (true)
+            {
+                string? data = Console.ReadLine();
+                if (data != null)
+                {
+                    if (data == "/q")
+                    {
+                        break;
+                    }
+
+                    int bytesSent = socket.Send(Encoding.UTF8.GetBytes(data));
+                }
+            }
+        }
+
+        private static async Task Receive(Socket connection)
+        {
+            while (true)
+            {
+                byte[] bytes = new byte[1024];
+                int bytesRec = await connection.ReceiveAsync(bytes);
+
+                Console.WriteLine(Encoding.ASCII.GetString(bytes, 0, bytesRec));
+            }
+        }
+
+        private static void StartServer(SocketConnection listener)
+        {
             listener.socket.Bind(listener.endPoint);
             listener.socket.Listen(10);
 
@@ -73,48 +104,21 @@ namespace UPnPChat
 
             Socket handler = listener.socket.Accept();
 
-            string data = null;
-            byte[] bytes = null;
+            Console.WriteLine("A client has connect");
 
-            while(true)
-            {
-                bytes = new byte[1024];
-                int bytesRec = handler.Receive(bytes);
-                data += Encoding.ASCII.GetString(bytes, 0, bytesRec);
+            Task.Run(() => Receive(handler));
 
-                if(data.IndexOf("<EOF>") > -1)
-                {
-                    break;
-                }
-            }
-
-            Console.WriteLine($"Text received : {data}");
-
-            byte[] msg = Encoding.ASCII.GetBytes(data);
-
-            handler.Send(msg);
-            handler.Shutdown(SocketShutdown.Both);
-            handler.Close();
+            Interaction(handler);
         }
 
-        public static void StartClient(int port)
+        public static void StartClient(SocketConnection connection)
         {
-            byte[] bytes = new byte[1024];
-            SocketConnection connection = new SocketConnection(port);
-            
             connection.socket.Connect(connection.endPoint);
             Console.WriteLine($"Socket connected to {connection.socket.RemoteEndPoint}");
 
-            byte[] message = Encoding.ASCII.GetBytes("This is a test<EOF>");
+            Task.Run(() => Receive(connection.socket));
 
-            int bytesSent = connection.socket.Send(message);
-
-            int bytesRec = connection.socket.Receive(bytes);
-            Console.WriteLine($"Echoed test = {Encoding.ASCII.GetString(bytes, 0, bytesRec)}");
-
-            // Release the socket.
-            connection.socket.Shutdown(SocketShutdown.Both);
-            connection.socket.Close();
+            Interaction(connection.socket);
         }
     }
 }

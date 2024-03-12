@@ -9,4 +9,5 @@ If you still decide to use it, be aware that UPnPChat author are not responsible
 ## Task
 
 - [x] Setup project for basic socket communication
-- [ ] Create basic chat interaction (Sending/Receiving mes
+- [x] Create basic chat interaction (Sending/Receiving message)
+- [ ] Send structured data (usename, date, message, etc...)
