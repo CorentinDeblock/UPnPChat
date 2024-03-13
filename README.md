@@ -10,4 +10,5 @@ If you still decide to use it, be aware that UPnPChat author are not responsible
 
 - [x] Setup project for basic socket communication
 - [x] Create basic chat interaction (Sending/Receiving message)
+- [ ] Fix unhandled network issue problem (lost internet, etc...)
 - [ ] Send structured data (usename, date, message, etc...)

@@ -32,6 +32,8 @@ namespace UPnPChat
 
     internal class Program
     {
+        private static bool Quit = false;
+
         static void Main(string[] args)
         {
             Console.WriteLine("Please enter port");
@@ -69,29 +71,49 @@ namespace UPnPChat
 
         private static void Interaction(Socket socket)
         {
-            while (true)
+            while (!Quit)
             {
                 string? data = Console.ReadLine();
-                if (data != null)
+                if (data != null && !Quit)
                 {
                     if (data == "/q")
                     {
-                        break;
+                        Quit = true;
+                    } else
+                    {
+                        int bytesSent = socket.Send(Encoding.UTF8.GetBytes(data));
                     }
-
-                    int bytesSent = socket.Send(Encoding.UTF8.GetBytes(data));
                 }
             }
         }
 
         private static async Task Receive(Socket connection)
         {
-            while (true)
+            while (!Quit)
             {
                 byte[] bytes = new byte[1024];
-                int bytesRec = await connection.ReceiveAsync(bytes);
 
-                Console.WriteLine(Encoding.ASCII.GetString(bytes, 0, bytesRec));
+                Task<int> receivedTask = connection.ReceiveAsync(bytes);
+                Task data = await Task.WhenAny(receivedTask, Task.Delay(1000));
+
+                Console.WriteLine(data.IsFaulted);
+
+                int bytesRec = receivedTask.Result;
+
+                if (data.IsFaulted)
+                {
+                    Console.WriteLine("Client disconnect... Press anything to quit");
+                    Quit = true;
+                    break;
+                }
+
+                if (bytesRec != 0)
+                {
+                    if (bytes[0] != 0x74)
+                    {
+                        Console.WriteLine(Encoding.ASCII.GetString(bytes, 0, bytesRec));
+                    }
+                }
             }
         }
 
@@ -106,9 +128,19 @@ namespace UPnPChat
 
             Console.WriteLine("A client has connect");
 
-            Task.Run(() => Receive(handler));
+            _ = Receive(handler);
+            _ = HearthBeat(handler);
 
             Interaction(handler);
+        }
+
+        private static async Task HearthBeat(Socket socket)
+        {
+            var periodicTimer = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
+            while (await periodicTimer.WaitForNextTickAsync())
+            {
+                socket.Send([0x74]);
+            }
         }
 
         public static void StartClient(SocketConnection connection)
@@ -116,7 +148,8 @@ namespace UPnPChat
             connection.socket.Connect(connection.endPoint);
             Console.WriteLine($"Socket connected to {connection.socket.RemoteEndPoint}");
 
-            Task.Run(() => Receive(connection.socket));
+            _ = Receive(connection.socket);
+            _ = HearthBeat(connection.socket);
 
             Interaction(connection.socket);
         }
