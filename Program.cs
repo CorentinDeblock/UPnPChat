@@ -32,7 +32,8 @@ namespace UPnPChat
 
     internal class Program
     {
-        private static bool Quit = false;
+        public static volatile bool Quit = false;
+        public static volatile bool ClientDisconnect = false;
 
         static void Main(string[] args)
         {
@@ -59,9 +60,13 @@ namespace UPnPChat
                         }
                     }
 
-                    // Release the socket.
-                    connection.socket.Shutdown(SocketShutdown.Both);
-                    connection.socket.Close();
+
+                    if(!ClientDisconnect)
+                    {
+                        // Release the socket.
+                        connection.socket.Shutdown(SocketShutdown.Both);
+                        connection.socket.Close();
+                    }
                 }
             }catch (Exception ex)
             {
@@ -74,6 +79,7 @@ namespace UPnPChat
             while (!Quit)
             {
                 string? data = Console.ReadLine();
+
                 if (data != null && !Quit)
                 {
                     if (data == "/q")
@@ -81,7 +87,7 @@ namespace UPnPChat
                         Quit = true;
                     } else
                     {
-                        int bytesSent = socket.Send(Encoding.UTF8.GetBytes(data));
+                        socket.Send(Encoding.UTF8.GetBytes(data));
                     }
                 }
             }
@@ -91,28 +97,25 @@ namespace UPnPChat
         {
             while (!Quit)
             {
-                byte[] bytes = new byte[1024];
-
-                Task<int> receivedTask = connection.ReceiveAsync(bytes);
-                Task data = await Task.WhenAny(receivedTask, Task.Delay(1000));
-
-                Console.WriteLine(data.IsFaulted);
-
-                int bytesRec = receivedTask.Result;
-
-                if (data.IsFaulted)
+                try
                 {
-                    Console.WriteLine("Client disconnect... Press anything to quit");
-                    Quit = true;
-                    break;
-                }
+                    byte[] bytes = new byte[1024];
 
-                if (bytesRec != 0)
-                {
-                    if (bytes[0] != 0x74)
+                    int bytesRec = await connection.ReceiveAsync(bytes);
+
+                    if (bytesRec != 0)
                     {
-                        Console.WriteLine(Encoding.ASCII.GetString(bytes, 0, bytesRec));
+                        if (bytes[0] != 0x74)
+                        {
+                            Console.WriteLine(Encoding.ASCII.GetString(bytes, 0, bytesRec));
+                        }
                     }
+                }
+                catch (Exception)
+                {
+                    Console.WriteLine("Client disconnect... Press any key to exit");
+                    Quit = true;
+                    ClientDisconnect = true;
                 }
             }
         }
@@ -129,7 +132,6 @@ namespace UPnPChat
             Console.WriteLine("A client has connect");
 
             _ = Receive(handler);
-            _ = HearthBeat(handler);
 
             Interaction(handler);
         }
@@ -149,7 +151,6 @@ namespace UPnPChat
             Console.WriteLine($"Socket connected to {connection.socket.RemoteEndPoint}");
 
             _ = Receive(connection.socket);
-            _ = HearthBeat(connection.socket);
 
             Interaction(connection.socket);
         }
