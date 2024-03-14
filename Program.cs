@@ -105,10 +105,7 @@ namespace UPnPChat
 
                     if (bytesRec != 0)
                     {
-                        if (bytes[0] != 0x74)
-                        {
-                            Console.WriteLine(Encoding.ASCII.GetString(bytes, 0, bytesRec));
-                        }
+                        Console.WriteLine(Encoding.ASCII.GetString(bytes, 0, bytesRec));
                     }
                 }
                 catch (Exception)
@@ -134,15 +131,6 @@ namespace UPnPChat
             _ = Receive(handler);
 
             Interaction(handler);
-        }
-
-        private static async Task HearthBeat(Socket socket)
-        {
-            var periodicTimer = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
-            while (await periodicTimer.WaitForNextTickAsync())
-            {
-                socket.Send([0x74]);
-            }
         }
 
         public static void StartClient(SocketConnection connection)
