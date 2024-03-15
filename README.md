@@ -14,5 +14,5 @@ If you still decide to use it, be aware that UPnPChat author are not responsible
 - [ ] Implement RPC protocol
 - [x] Allow multi directional communication ("lobby")
 - [x] Send structured data (username, message, etc...)
-- [ ] Create relialable data size protocol for sending and receiving message
+- [ ] Create reliable data size protocol for sending and receiving message
 - [ ] Implement socket/id identification
