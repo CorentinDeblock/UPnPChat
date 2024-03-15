@@ -11,4 +11,8 @@ If you still decide to use it, be aware that UPnPChat author are not responsible
 - [x] Setup project for basic socket communication
 - [x] Create basic chat interaction (Sending/Receiving message)
 - [x] Fix abrupt network disconnection issue (lost internet, etc...)
-- [ ] Send structured data (usename, date, message, etc...)
+- [ ] Implement RPC protocol
+- [x] Allow multi directional communication ("lobby")
+- [x] Send structured data (username, message, etc...)
+- [ ] Create relialable data size protocol for sending and receiving message
+- [ ] Implement socket/id identification

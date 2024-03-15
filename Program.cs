@@ -1,11 +1,16 @@
 ﻿using Microsoft.VisualBasic;
+using Newtonsoft.Json;
 using System;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Runtime.Serialization.Formatters.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
+using UPnPChat.src;
 
 namespace UPnPChat
 {
@@ -30,51 +35,153 @@ namespace UPnPChat
         }
     }
 
+    public class Message
+    {
+        public string Data;
+        public DateTime Date;
+        public string Author;
+
+        public Message(string data, DateTime date, string author)
+        {
+            Data = data;
+            Date = date;
+            Author = author;
+        }
+    }
+
+    class MessageDataHandler : DataHandler<Message>
+    {
+        public byte[] byteStorage()
+        {
+            return new byte[4096];
+        }
+
+        public Message Receive(byte[] data, int numBytes)
+        {
+            Message? json = JsonConvert.DeserializeObject<Message>(Encoding.UTF8.GetString(data));
+            
+            if(json != null)
+            {
+                return json;
+            }
+
+            Console.WriteLine("Data was null");
+
+            throw new Exception("Received invalid data");
+        }
+
+        public byte[] Send(Message data)
+        {
+            return Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(data));
+        }
+    }
+
     internal class Program
     {
-        public static volatile bool Quit = false;
-        public static volatile bool ClientDisconnect = false;
+        private static volatile bool Quit = false;
+        private static string Author = "";
 
         static void Main(string[] args)
         {
-            Console.WriteLine("Please enter port");
-            string? port = Console.ReadLine();
+            string port = AskForValidData("Please enter port", "Please enter a valid port");
+            string username = AskForValidData("Please enter a username", "Please enter a valid username");
+            string type = AskForValidData("Enter connection type\n1. client\n2. server", "Please enter a valid connection type");
 
-            Console.WriteLine("Enter connection type\n1. client\n2. server");
-            string? type = Console.ReadLine();
+            Author = username;
 
             try
             {
-                if(port != null)
+                if (type == "1")
                 {
-                    SocketConnection connection = new SocketConnection(int.Parse(port));
+                    var client = new Client<MessageDataHandler, Message>();
 
-                    if(type != null)
-                    {
-                        if(type == "1")
-                        {
-                            StartClient(connection);
-                        } else if(type == "2")
-                        {
-                            StartServer(connection);
-                        }
-                    }
+                    client.OnReceiveSucceeded += HandleSocketData;
 
+                    client.OnConnection = (ip, port) => { Console.WriteLine($"Connecting to {ip}:{port}"); };
+                    client.OnConnected = (ip, port) => { Console.WriteLine($"Connected to {ip}:{port}"); };
+                    client.OnSocketDisconnected = (socket) => {
+                        Console.WriteLine("Server has closed... You can type /q to quit");
+                        client.Close();
+                    };
 
-                    if(!ClientDisconnect)
-                    {
-                        // Release the socket.
-                        connection.socket.Shutdown(SocketShutdown.Both);
-                        connection.socket.Close();
-                    }
+                    client.Connect(Dns.GetHostEntry("localhost").AddressList[0], int.Parse(port));
+                    client.ReceiveAsync();
+
+                    Interaction(client);
+
+                    client.Close();
                 }
-            }catch (Exception ex)
+                else if (type == "2")
+                {
+                    var host = new Host<MessageDataHandler, Message>(Dns.GetHostEntry("localhost").AddressList[0], int.Parse(port));
+
+                    host.OnListening += () => Console.WriteLine("Listening for connection... You can type /q to quit");
+                    host.OnFailedToListen += (ex) => Console.WriteLine($"Failed to listen : {ex.Message} {host.Socket}");
+
+                    host.OnClientConnected += (socket) => Console.WriteLine($"A client has connected");
+                    host.OnSocketDisconnected += (socket) =>
+                    {
+                        Console.WriteLine("A client has disconnected");
+                        if (host.SocketConnected.Count == 0)
+                        {
+                            Console.WriteLine("Alone in the lobby... Wait for connection to communicate or /q to quit");
+                        }
+                    };
+
+                    host.OnReceiveSucceeded += HandleSocketData;
+
+                    host.ListenAsync();
+                    Interaction(host);
+
+                    host.Close();
+                }
+            }
+            catch (Exception ex)
             {
                 Console.WriteLine(ex.ToString());
             }
         }
 
-        private static void Interaction(Socket socket)
+        private static void HandleSocketData(SocketData<Message> socketData)
+        {
+            Console.WriteLine($"[{socketData.data.Date.ToString("dd/MM/yyyy HH:mm:ss")}] {socketData.data.Author} : {socketData.data.Data}");
+        }
+
+        private static string AskForValidData(string welcomeMessage, string warnerMessage)
+        {
+            Console.WriteLine(welcomeMessage);
+            string? data = Console.ReadLine();
+
+            while (data == null ? true : data.Trim().Length == 0)
+            {
+                Console.WriteLine(warnerMessage);
+                data = Console.ReadLine();
+            }
+
+            return data;
+        }
+
+        private static void Interaction(Host<MessageDataHandler, Message> host)
+        {
+            while (!Quit)
+            {
+                string? data = Console.ReadLine();
+
+                if (data != null && !Quit)
+                {
+                    if (data == "/q")
+                    {
+                        Quit = true;
+                    }
+                    else
+                    {
+                        host.SendToAll(CreateMessageFromString(data));
+                    }
+                }
+            }
+        }
+
+        private static void Interaction(Client<MessageDataHandler, Message> client)
         {
             while (!Quit)
             {
@@ -87,60 +194,15 @@ namespace UPnPChat
                         Quit = true;
                     } else
                     {
-                        socket.Send(Encoding.UTF8.GetBytes(data));
+                        client.Send(CreateMessageFromString(data));
                     }
                 }
             }
         }
 
-        private static async Task Receive(Socket connection)
+        private static Message CreateMessageFromString(string data)
         {
-            while (!Quit)
-            {
-                try
-                {
-                    byte[] bytes = new byte[1024];
-
-                    int bytesRec = await connection.ReceiveAsync(bytes);
-
-                    if (bytesRec != 0)
-                    {
-                        Console.WriteLine(Encoding.ASCII.GetString(bytes, 0, bytesRec));
-                    }
-                }
-                catch (Exception)
-                {
-                    Console.WriteLine("Client disconnect... Press any key to exit");
-                    Quit = true;
-                    ClientDisconnect = true;
-                }
-            }
-        }
-
-        private static void StartServer(SocketConnection listener)
-        {
-            listener.socket.Bind(listener.endPoint);
-            listener.socket.Listen(10);
-
-            Console.WriteLine("Waiting for new connection");
-
-            Socket handler = listener.socket.Accept();
-
-            Console.WriteLine("A client has connect");
-
-            _ = Receive(handler);
-
-            Interaction(handler);
-        }
-
-        public static void StartClient(SocketConnection connection)
-        {
-            connection.socket.Connect(connection.endPoint);
-            Console.WriteLine($"Socket connected to {connection.socket.RemoteEndPoint}");
-
-            _ = Receive(connection.socket);
-
-            Interaction(connection.socket);
+            return new Message(data, DateTime.Now, Author);
         }
     }
 }
