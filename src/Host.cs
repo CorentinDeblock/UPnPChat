@@ -9,14 +9,13 @@ using System.Xml.Linq;
 
 namespace UPnPChat.src
 {
-    public class Host<DataHandler, Data> : SocketConnection<Data>
-    where Data : class
-    where DataHandler : DataHandler<Data>, new()
+
+    public class Host : SocketConnection
     {
         private bool _quit = false;
         private List<Socket> _socketConnected = new List<Socket>();
 
-        public Host(IPAddress ip, int port) : base(new DataHandler(), ip, port)
+        public Host(IPAddress ip, int port) : base(ip, port)
         {
             OnConnectionClose += () => _quit = true;
             OnClientConnected += _socketConnected.Add;
@@ -76,16 +75,21 @@ namespace UPnPChat.src
         {
             while (_IsSocketConnected(handler))
             {
-                Data? data = await __ReceiveAsync(handler);
-
-                if (data != null)
-                {
-                    SendToAllExcept(data, [handler]);
-                }
+                await __ReceiveAsync(handler);
             }
         }
 
-        public void SendToAllExcept(Data data, List<Socket> socketIgnored)
+        public void SendToAllExcept<Data>(Data data, List<Socket> socketIgnored) where Data : struct
+        {
+            foreach (Socket socket in _socketConnected)
+            {
+                if (!socketIgnored.Contains(socket))
+                {
+                    _ = SendAsync(socket, data);
+                }
+            }
+        }
+        public void SendToAllExcept(byte[] data, List<Socket> socketIgnored)
         {
             foreach (Socket socket in _socketConnected)
             {
@@ -96,7 +100,14 @@ namespace UPnPChat.src
             }
         }
 
-        public void SendToAll(Data data)
+        public void SendToAll<Data>(Data data) where Data : struct
+        {
+            foreach (Socket socket in _socketConnected)
+            {
+                _ = SendAsync(socket, data);
+            }
+        }
+        public void SendToAll(byte[] data)
         {
             foreach (Socket socket in _socketConnected)
             {
@@ -104,12 +115,22 @@ namespace UPnPChat.src
             }
         }
 
-        public void Send(Socket socket, Data data)
+        public void Send(Socket socket, byte[] data)
         {
             __Send(socket, data);
         }
 
-        public async Task SendAsync(Socket socket, Data data)
+        public async Task SendAsync(Socket socket, byte[] data)
+        {
+            await __SendAsync(socket, data);
+        }
+
+        public void Send<Data>(Socket socket, Data data) where Data : struct
+        {
+            __Send(socket, data);
+        }
+
+        public async Task SendAsync<Data>(Socket socket, Data data) where Data : struct
         {
             await __SendAsync(socket, data);
         }

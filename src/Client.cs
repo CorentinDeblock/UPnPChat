@@ -2,14 +2,13 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
 
 namespace UPnPChat.src
 {
-    public class Client<DataHandler, Data> : SocketConnection<Data>
-        where Data : class
-        where DataHandler : DataHandler<Data>, new()
+    public class Client : SocketConnection
     {
         private bool _quit = false;
         private string _ip = "";
@@ -29,15 +28,16 @@ namespace UPnPChat.src
         public Action<string, int>? OnConnected { get { return __OnConnected; } set { __OnConnected = value; } }
         public Action<Exception>? OnConnectionFailed { get { return __OnConnectionFailed; } set { __OnConnectionFailed = value; } }
 
-        public Client() : base(new DataHandler(), Dns.GetHostEntry("localhost").AddressList[0], 0)
+        public Client() : base(Dns.GetHostEntry("localhost").AddressList[0], 0)
         {
-            __OnConnection += (ip, port) =>
+            OnConnection += (ip, port) =>
             {
                 _ip = ip;
                 _port = port;
             };
 
             OnConnectionClose += () => _quit = true;
+            _socketId = Guid.NewGuid();
         }
 
         public void Connect(string ip, int port)
@@ -59,12 +59,21 @@ namespace UPnPChat.src
             await __ConnectAsync(ip, port);
         }
 
-        public void Send(Data data)
+        public void Send<Data>(Data data) where Data : struct
         {
             __Send(Socket, data);
         }
 
-        public async Task SendAsync(Data data)
+        public async Task SendAsync<Data>(Data data) where Data : struct
+        {
+            await __SendAsync(Socket, data);
+        }
+        public void Send(byte[] data)
+        {
+            __Send(Socket, data);
+        }
+
+        public async Task SendAsync(byte[] data)
         {
             await __SendAsync(Socket, data);
         }

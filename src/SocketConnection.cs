@@ -1,40 +1,33 @@
-﻿using System;
+﻿using Newtonsoft.Json;
 using System.Net;
 using System.Net.Sockets;
-using System.Reflection;
-using System.Reflection.Metadata;
-using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text;
-using System.Threading;
-using static System.Runtime.InteropServices.JavaScript.JSType;
+using System.Text.Json;
 
 namespace UPnPChat.src
 {
-    public interface DataHandler<Data> where Data : class
+    using DataHandler = Action<SocketData, int>;
+
+    public struct SocketContent
     {
-        public byte[] Send(Data data);
-        public Data Receive(byte[] data, int numBytes);
-        public byte[] byteStorage();
+        public string Annotation;
+        public object Data;
     }
 
-    public struct SocketData<Data>
+    public struct SocketData
     {
-        public Data data;
-        public byte[] bytes;
-        public int numBytes;
+        public SocketContent Content;
+        public Socket Socket;
     }
-
 
     // Should handle Exception better in the future. But it's ok for now
-    public abstract class SocketConnection<Data> where Data : class
+    public abstract class SocketConnection
     {
-        private DataHandler<Data> _dataHandler;
         private IPAddress _ipAddress;
         private IPEndPoint _endPoint;
         private Socket _socket;
-        private bool _disposed;
         private bool _isBinded = false;
+        public Guid _socketId;
 
         // Create Getter and/or setter in final class for them
         // Host
@@ -51,7 +44,7 @@ namespace UPnPChat.src
         protected Action<Exception>? __OnConnectionFailed;
         // ---------------------------------------------------
 
-        public Action<SocketData<Data>>? OnSendSucceeded;
+        public Action<byte[], int>? OnSendSucceeded;
         public Action<Socket, Exception>? OnSendFailed;
 
         /// <summary>
@@ -61,29 +54,37 @@ namespace UPnPChat.src
         /// </summary>
         public Action<Socket>? OnSocketDisconnected;
 
-        public Action<SocketData<Data>>? OnReceiveSucceeded;
+        public Action<Socket, byte[], int>? OnReceiveSucceeded;
         public Action<Socket, Exception>? OnReceiveFailed;
+        public Action<Exception>? OnConnectionCloseFailed;
+
+        public int MaximumSocketBufferSize = 8192;
 
         public Action? OnConnectionClose;
+
+        public Dictionary<string, DataHandler> DataHandlers = new Dictionary<string, DataHandler>();
 
         public Socket Socket { get { return _socket; } protected set { _socket = value; } }
         public IPAddress IPAddress { get { return _ipAddress; } protected set { _ipAddress = value; } }
         public IPEndPoint IPEndPoint { get { return _endPoint; } protected set { _endPoint = value; } }
+        public Guid SocketId { get { return _socketId; } }
 
-        public SocketConnection(DataHandler<Data> dataHandler, IPAddress ip, int port)
+        public SocketConnection(IPAddress ip, int port)
         {
-            _disposed = false;
-            _dataHandler = dataHandler;
+            
             _ipAddress = ip;
             _endPoint = new IPEndPoint(_ipAddress, port);
             _socket = new Socket(_ipAddress.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+            _socketId = Guid.NewGuid();
+
+            Console.WriteLine(_socketId);
         }
 
         private void _Bind()
         {
             if (!_isBinded)
             {
-                _disposed = false;
+                
                 _socket.Bind(_endPoint);
                 _socket.Listen(__Backlog);
 
@@ -94,6 +95,27 @@ namespace UPnPChat.src
 
                 _isBinded = true;
             }
+        }
+        private byte[] _CreateObject<Data>(Data data) where Data : struct
+        {
+            return Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new SocketContent
+            {
+                Data = data,
+                Annotation = typeof(Data).Name
+            }));
+        }
+        private SocketContent _GetSocketContent(byte[] data)
+        {
+            return JsonConvert.DeserializeObject<SocketContent>(Encoding.UTF8.GetString(data));
+        }
+
+        private SocketData _CreateSocketData(Socket socket, SocketContent content)
+        {
+            return new SocketData
+            {
+                Socket = socket,
+                Content = content,
+            };
         }
 
         protected Socket? __Listen()
@@ -157,7 +179,6 @@ namespace UPnPChat.src
                 }
 
                 _socket.Connect(ip, port);
-                _disposed = false;
 
                 if (__OnConnected != null)
                 {
@@ -181,7 +202,6 @@ namespace UPnPChat.src
                 }
 
                 _socket.Connect(ip, port);
-                _disposed = false;
 
                 if (__OnConnected != null)
                 {
@@ -207,7 +227,6 @@ namespace UPnPChat.src
                 }
 
                 await _socket.ConnectAsync(ip, port);
-                _disposed = false;
 
                 if (__OnConnected != null)
                 {
@@ -232,7 +251,6 @@ namespace UPnPChat.src
                 }
 
                 await _socket.ConnectAsync(ip, port);
-                _disposed = false;
 
                 if (__OnConnected != null)
                 {
@@ -248,16 +266,16 @@ namespace UPnPChat.src
             }
         }
 
-        protected void __Send(Socket socket, Data data)
+        protected void __Send<Data>(Socket socket, Data data) where Data : struct
         {
             try
             {
-                byte[] bytesSend = _dataHandler.Send(data);
-                int numBytesSend = socket.Send(bytesSend);
+                byte[] byteSend = _CreateObject(data);
+                int numBytesSend = socket.Send(byteSend);
 
                 if(OnSendSucceeded != null)
                 {
-                    OnSendSucceeded(new SocketData<Data>{ data = data, bytes = bytesSend, numBytes = numBytesSend });
+                    OnSendSucceeded(byteSend, numBytesSend);
                 }
             }
             catch (ObjectDisposedException ex)
@@ -265,7 +283,6 @@ namespace UPnPChat.src
                 if (OnSendFailed != null)
                 {
                     OnSendFailed(socket, ex);
-                    _disposed = true;
                 }
             }
             catch (SocketException ex)
@@ -282,16 +299,16 @@ namespace UPnPChat.src
             }
         }
 
-        protected async Task __SendAsync(Socket socket, Data data)
+        protected async Task __SendAsync<Data>(Socket socket, Data data) where Data : struct
         {
             try
             {
-                byte[] bytesSend = _dataHandler.Send(data);
+                byte[] bytesSend = _CreateObject(data);
                 int numBytesSend = await socket.SendAsync(bytesSend);
 
                 if (OnSendSucceeded != null)
                 {
-                    OnSendSucceeded(new SocketData<Data> { data = data, bytes = bytesSend, numBytes = numBytesSend });
+                    OnSendSucceeded(bytesSend, numBytesSend);
                 }
             }
             catch (ObjectDisposedException ex)
@@ -299,7 +316,69 @@ namespace UPnPChat.src
                 if (OnSendFailed != null)
                 {
                     OnSendFailed(socket, ex);
-                    _disposed = true;
+                }
+            }
+            catch (SocketException ex)
+            {
+                if (OnSocketDisconnected != null)
+                {
+                    OnSocketDisconnected(socket);
+                }
+
+                if (OnSendFailed != null)
+                {
+                    OnSendFailed(socket, ex);
+                }
+            }
+        }
+        protected void __Send(Socket socket, byte[] data)
+        {
+            try
+            {
+                int numBytesSend = socket.Send(data);
+
+                if (OnSendSucceeded != null)
+                {
+                    OnSendSucceeded(data, numBytesSend);
+                }
+            }
+            catch (ObjectDisposedException ex)
+            {
+                if (OnSendFailed != null)
+                {
+                    OnSendFailed(socket, ex);
+                }
+            }
+            catch (SocketException ex)
+            {
+                if (OnSendFailed != null)
+                {
+                    OnSendFailed(socket, ex);
+                }
+
+                if (OnSocketDisconnected != null)
+                {
+                    OnSocketDisconnected(socket);
+                }
+            }
+        }
+
+        protected async Task __SendAsync(Socket socket, byte[] data)
+        {
+            try
+            {
+                int numBytesSend = await socket.SendAsync(data);
+
+                if (OnSendSucceeded != null)
+                {
+                    OnSendSucceeded(data, numBytesSend);
+                }
+            }
+            catch (ObjectDisposedException ex)
+            {
+                if (OnSendFailed != null)
+                {
+                    OnSendFailed(socket, ex);
                 }
             }
             catch (SocketException ex)
@@ -316,30 +395,35 @@ namespace UPnPChat.src
             }
         }
 
-        protected Data? __Receive(Socket socket)
+        protected byte[] __Receive(Socket socket)
         {
             try
             {
-                byte[] bytesReceive = _dataHandler.byteStorage();
+                byte[] bytesReceive = new byte[MaximumSocketBufferSize];
                 int numByteReceive = socket.Receive(bytesReceive);
-                Data data = _dataHandler.Receive(bytesReceive, numByteReceive);
+                
+                SocketContent socketContent = _GetSocketContent(bytesReceive);
+                DataHandler handler = DataHandlers[socketContent.Annotation];
 
                 if (OnReceiveSucceeded != null)
                 {
-                    OnReceiveSucceeded(new SocketData<Data> { data = data, bytes = bytesReceive, numBytes = numByteReceive });
+                    OnReceiveSucceeded(socket, bytesReceive, numByteReceive);
                 }
 
-                return data;
+                if (handler != null)
+                {
+                    handler(_CreateSocketData(socket, socketContent), numByteReceive);
+                }
+
+                return bytesReceive;
             }
             catch (ObjectDisposedException ex)
             {
                 if (OnReceiveFailed != null)
                 {
                     OnReceiveFailed(socket, ex);
-                    _disposed = true;
                 }
 
-                return null;
             }
             catch (SocketException ex)
             {
@@ -352,35 +436,38 @@ namespace UPnPChat.src
                 {
                     OnReceiveFailed(socket, ex);
                 }
-
-                return null;
             }
+            return [];
         }
 
-        protected async Task<Data?> __ReceiveAsync(Socket socket)
+        protected async Task<byte[]> __ReceiveAsync(Socket socket)
         {
             try
             {
-                byte[] bytesReceive = _dataHandler.byteStorage();
+                byte[] bytesReceive = new byte[MaximumSocketBufferSize];
                 int numByteReceive = await socket.ReceiveAsync(bytesReceive);
-                Data data = _dataHandler.Receive(bytesReceive, numByteReceive);
+
+                SocketContent socketContent = _GetSocketContent(bytesReceive);
+                DataHandler handler = DataHandlers[socketContent.Annotation];
 
                 if (OnReceiveSucceeded != null)
                 {
-                    OnReceiveSucceeded(new SocketData<Data> { data = data, bytes = bytesReceive, numBytes = numByteReceive });
+                    OnReceiveSucceeded(socket, bytesReceive, numByteReceive);
                 }
 
-                return data;
+                if (handler != null)
+                {
+                    handler(_CreateSocketData(socket, socketContent), numByteReceive);
+                }
+
+                return bytesReceive;
             }
             catch (ObjectDisposedException ex)
             {
                 if (OnReceiveFailed != null)
                 {
                     OnReceiveFailed(socket, ex);
-                    _disposed = true;
                 }
-
-                return null;
             }
             catch(SocketException ex)
             {
@@ -393,25 +480,34 @@ namespace UPnPChat.src
                 {
                     OnReceiveFailed(socket, ex);
                 }
-
-                return null;
             }
+
+            return [];
         }
 
         public void Close()
         {
-            if (!_disposed)
+            try
             {
                 Socket.Shutdown(SocketShutdown.Both);
                 Socket.Close();
-            }
 
-            if(OnConnectionClose != null && !_disposed)
+                if (OnConnectionClose != null)
+                {
+                    OnConnectionClose();
+                }
+            }catch (Exception ex)
             {
-                OnConnectionClose();
+                if(OnConnectionCloseFailed != null)
+                {
+                    OnConnectionCloseFailed(ex);
+                }
             }
+        }
 
-            _disposed = true;
+        public void AddDataHandler<Data>(DataHandler dataHandler) where Data : struct
+        {
+            DataHandlers.Add(typeof(Data).Name, dataHandler);
         }
     }
 }
