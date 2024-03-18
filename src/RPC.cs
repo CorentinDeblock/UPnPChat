@@ -192,12 +192,13 @@ namespace UPnPChat.src
         }
 
         /// <summary>
-        /// Call a RPC method to the last socket that has send a message. It's useful when you need to call a client error rpc function
+        /// Call a RPC method to the last socket that has send a message. 
+        /// It's useful when you need to call a rpc method to the last client that has call a rpc method on the server
         /// </summary>
         /// <typeparam name="RPCType">Type of RPC func</typeparam>
         /// <param name="RPCfunc">The RPC func</param>
         /// <param name="parameter">The parameter</param>
-        protected void CallBack<RPCType>(RPCType RPCfunc, params object[] parameter) where RPCType : Delegate
+        protected void Feedback<RPCType>(RPCType RPCfunc, params object[] parameter) where RPCType : Delegate
         {
             CallTo(__lastSocket!, RPCfunc, parameter);
         }

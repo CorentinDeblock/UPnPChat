@@ -1,6 +1,7 @@
 ﻿using Microsoft.VisualBasic;
 using Newtonsoft.Json;
 using System;
+using System.IO;
 using System.Linq.Expressions;
 using System.Net;
 using System.Net.Sockets;
@@ -47,6 +48,103 @@ namespace UPnPChat
             Author = author;
         }
     }
+    public class AesCbcCipher
+    {
+        public byte[] Iv { get; }
+        public byte[] CiphertextBytes { get; }
+
+        public static AesCbcCipher FromByte(byte[] data, int numBytes)
+        {
+            string str = Encoding.Unicode.GetString(data, 0, numBytes);
+            byte[] original = Convert.FromBase64String(str);
+
+            return new AesCbcCipher(
+                original.Take(16).ToArray(),
+                original.Skip(16).ToArray()
+            );
+        }
+
+        public AesCbcCipher(byte[] iv, byte[] ciphertextBytes)
+        {
+            Iv = iv;
+            CiphertextBytes = ciphertextBytes;
+        }
+
+        public byte[] ToBytes()
+        {
+            byte[] original = Iv.Concat(CiphertextBytes).ToArray();
+            string base64 = Convert.ToBase64String(original);
+            return Encoding.Unicode.GetBytes(base64);
+        }
+    }
+
+    public class AESMiddleware : Middleware
+    {
+        public byte[] Receive(byte[] data, int numBytes)
+        {
+            try
+            {
+                using (Aes aes = Aes.Create())
+                {
+                    var aesCypher = AesCbcCipher.FromByte(data, numBytes);
+                    var decryptor = aes.CreateDecryptor(_GetKey(), aesCypher.Iv);
+
+                    using (MemoryStream memoryStream = new MemoryStream(aesCypher.CiphertextBytes))
+                    {
+                        using (CryptoStream cryptoStream = new CryptoStream(memoryStream, decryptor, CryptoStreamMode.Read))
+                        {
+                            string strData;
+                            using (StreamReader streamReader = new StreamReader(cryptoStream))
+                            {
+                                strData = streamReader.ReadToEnd();
+                            }
+
+                            return Encoding.Unicode.GetBytes(strData);
+                        }
+                    }
+                }
+            } catch(Exception ex)
+            {
+                Console.WriteLine(ex);
+                throw;
+            }
+        }
+
+        private byte[] _GetKey() => Encoding.Unicode.GetBytes(Program.Key);
+
+        public byte[] Send(byte[] data)
+        {
+            try
+            {
+                using (Aes aes = Aes.Create())
+                {
+                    var encryptor = aes.CreateEncryptor(_GetKey(), aes.IV);
+                    var descryptor = aes.CreateDecryptor(_GetKey(), aes.IV);
+
+                    using (MemoryStream memoryStream = new MemoryStream())
+                    {
+                        using (CryptoStream cryptoStream = new CryptoStream(memoryStream, encryptor, CryptoStreamMode.Write))
+                        {
+                            string datastr = Encoding.Unicode.GetString(data);
+
+                            using (StreamWriter streamWriter = new StreamWriter(cryptoStream))
+                            {
+                                streamWriter.Write(datastr);
+                            }
+                        }
+
+                        byte[] allDAta = new AesCbcCipher(aes.IV, memoryStream.ToArray()).ToBytes();
+
+                        return allDAta;
+                    }
+                }
+            } catch(Exception ex)
+            {
+                Console.WriteLine(ex);
+                throw;
+            }
+        }
+    }
 
     public class MessageRPC : RPC
     {
@@ -61,53 +159,38 @@ namespace UPnPChat
         [ServerRPC]
         public void ServerMessageRPC(Message message)
         {
-            HandleMessage(
-                message,
-                (username) => CallBack(PrivateMessageFailed, Program.CreateMessageFromString($"Failed to send message to user {username}. User dosen't exists")),
-                true
-            );
-        }
-
-        private void HandleMessage(Message message, Action<string> OnMessageFailed, bool displayMessage)
-        {
-            if (message.Content.Length > 0)
+            try
             {
-                if (message.Content.StartsWith("/to"))
+                if (message.Content.Length > 0)
                 {
-                    string username = message.Content.Split(" ")[1];
-
-                    var socketDataCache =
-                        SocketServerStorage
-                        .SocketDataCache
-                        .Where((socketData) => socketData.Value.Username == username).ToList();
-
-                    string contentFormated = message.Content.Remove(0, $"/to {username} ".Length);
-
-                    if (socketDataCache.Count > 0)
+                    if (message.Content.StartsWith("/to"))
                     {
-                        if (socketDataCache[0].Key == Socket)
+                        string username = message.Content.Split(" ")[1];
+
+                        var socketDataCache =
+                            SocketServerStorage
+                            .SocketDataCache
+                            .Where((socketData) => socketData.Value.Username == username).ToList();
+
+                        string contentFormated = message.Content.Remove(0, $"/to {username} ".Length);
+
+                        if (socketDataCache.Count > 0)
                         {
-                            DisplayMessage(Program.CreateMessageFromString(contentFormated));
+                            CallTo(socketDataCache[0].Key, ClientMessageRPC, Program.CreateMessageFromString(contentFormated));
                         }
                         else
                         {
-                            CallTo(socketDataCache[0].Key, ClientMessageRPC, Program.CreateMessageFromString(contentFormated));
+                            Feedback(PrivateMessageFailed, Program.CreateMessageFromString($"Failed to send message to user \"{username}\". User dosen't exists"));
                         }
                     }
                     else
                     {
-                        OnMessageFailed(username);
+                        Call(ClientMessageRPC, message);
                     }
                 }
-                else
-                {
-                    if(displayMessage)
-                    {
-                        DisplayMessage(message);
-                    }
-
-                    Call(ClientMessageRPC, message);
-                }
+            }catch(Exception ex)
+            {
+                Console.WriteLine(ex);
             }
         }
 
@@ -130,12 +213,12 @@ namespace UPnPChat
 
         public void Send(Message message)
         {
-            if(__networkType == NetworkType.Client)
+            try
             {
                 Call(ServerMessageRPC, message);
-            } else if(__networkType == NetworkType.Server) 
+            }catch(Exception e)
             {
-                HandleMessage(message, (username) => Console.WriteLine("Failed to send message to user {username}. User dosen't exists"), false);
+                Console.WriteLine(e.ToString());
             }
         }
     }
@@ -154,54 +237,34 @@ namespace UPnPChat
     {
         private static volatile bool Quit = false;
         private static string Author = "";
+        public static string Key = Environment.GetEnvironmentVariable("KEY")!;
 
         static void Main(string[] args)
         {
+            DotNetEnv.Env.TraversePath().Load();
+
             string port = AskForValidData("Please enter port", "Please enter a valid port");
             string username = AskForValidData("Please enter a username", "Please enter a valid username");
             string type = AskForValidData("Enter connection type\n1. client\n2. server", "Please enter a valid connection type");
 
             Author = username;
 
+            if (type != "1" && type != "2")
+            {
+                return;
+            }
+
             try
             {
-                if (type == "1")
-                {
-                    var client = new Client();
+                var client = new Client();
+                client.Middlewares.Add(new AESMiddleware());
 
-                    client.OnConnection = (ip, port) => { Console.WriteLine($"Connecting to {ip}:{port}"); };
-                    client.OnConnected = (ip, port) => 
-                    {
-                        Console.WriteLine($"Connected to {ip}:{port}");
-                        client.Send(new SocketDataCache
-                        {
-                            Username = username,
-                            SocketId = client.SocketId
-                        });
-                    };
-
-                    client.OnSocketDisconnected = (socket) =>
-                    {
-                        Console.WriteLine("Server has closed... You can type /q to quit");
-                        client.Close();
-                    };
-
-                    client.Connect(Dns.GetHostEntry("localhost").AddressList[0], int.Parse(port));
-                    client.ReceiveAsync();
-
-                    Interaction(new MessageRPC(client));
-
-                    client.Close();
-                }
-                else if (type == "2")
+                if (type == "2")
                 {
                     var host = new Host(Dns.GetHostEntry("localhost").AddressList[0], int.Parse(port));
-                    
-                    SocketServerStorage.SocketDataCache.Add(host.Socket, new SocketDataCache
-                    {
-                        SocketId = host.SocketId,
-                        Username = username,
-                    });
+                    host.Middlewares.Add(new AESMiddleware());
+
+                    new MessageRPC(host);
 
                     host.AddDataHandler<SocketDataCache>((socketData, _) =>
                     {
@@ -220,17 +283,49 @@ namespace UPnPChat
                     {
                         Console.WriteLine("A client has disconnected");
                         SocketServerStorage.SocketDataCache.Remove(socket);
-                        if (host.SocketConnected.Count == 0)
+                        if (host.SocketConnected.Count == 1)
                         {
                             Console.WriteLine("Alone in the lobby... Wait for connection to communicate or /q to quit");
                         }
                     };
 
                     host.ListenAsync();
-                    Interaction(new MessageRPC(host));
 
-                    host.Close();
+                    client.OnConnectionClose += () => host.Close();
                 }
+
+                client.OnConnected = (ip, port) =>
+                {
+                    if(type == "1")
+                    {
+                        Console.WriteLine($"Connected to {ip}:{port}");
+                    }
+
+                    client.Send(new SocketDataCache
+                    {
+                        Username = username,
+                        SocketId = client.SocketId
+                    });
+                };
+
+                if (type == "1")
+                {
+                    client.OnConnection += (ip, port) => { Console.WriteLine($"Connecting to {ip}:{port}"); };
+
+                    client.OnSocketDisconnected += (socket) =>
+                    {
+                        Console.WriteLine("Server has closed... You can type /q to quit");
+                        client.Close();
+                    };
+
+                }
+
+                client.Connect(Dns.GetHostEntry("localhost").AddressList[0], int.Parse(port));
+                client.ReceiveAsync();
+
+                Interaction(new MessageRPC(client));
+
+                client.Close();
             }
             catch (Exception ex)
             {

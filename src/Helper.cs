@@ -11,7 +11,14 @@ namespace UPnPChat.src
     {
         public static T DeserializeData<T>(this SocketData data)
         {
-            return JsonConvert.DeserializeObject<T>(data.Content.Data.ToString()!)!;
+            try
+            {
+                return JsonConvert.DeserializeObject<T>(data.Content.Data.ToString()!)!;
+            } catch(Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                throw;
+            }
         }
     }
 }

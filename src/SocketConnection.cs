@@ -6,7 +6,14 @@ using System.Text.Json;
 
 namespace UPnPChat.src
 {
+    using static System.Runtime.InteropServices.JavaScript.JSType;
     using DataHandler = Action<SocketData, int>;
+
+    public interface Middleware
+    {
+        public byte[] Send(byte[] data);
+        public byte[] Receive(byte[] data, int numBytesReceived);
+    }
 
     public struct SocketContent
     {
@@ -58,6 +65,8 @@ namespace UPnPChat.src
         public Action<Socket, Exception>? OnReceiveFailed;
         public Action<Exception>? OnConnectionCloseFailed;
 
+        public List<Middleware> Middlewares = new List<Middleware>();
+
         public int MaximumSocketBufferSize = 8192;
 
         public Action? OnConnectionClose;
@@ -76,8 +85,6 @@ namespace UPnPChat.src
             _endPoint = new IPEndPoint(_ipAddress, port);
             _socket = new Socket(_ipAddress.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
             _socketId = Guid.NewGuid();
-
-            Console.WriteLine(_socketId);
         }
 
         private void _Bind()
@@ -98,7 +105,7 @@ namespace UPnPChat.src
         }
         private byte[] _CreateObject<Data>(Data data) where Data : struct
         {
-            return Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(new SocketContent
+            return Encoding.Unicode.GetBytes(JsonConvert.SerializeObject(new SocketContent
             {
                 Data = data,
                 Annotation = typeof(Data).Name
@@ -106,7 +113,14 @@ namespace UPnPChat.src
         }
         private SocketContent _GetSocketContent(byte[] data)
         {
-            return JsonConvert.DeserializeObject<SocketContent>(Encoding.UTF8.GetString(data));
+            try
+            {
+                return JsonConvert.DeserializeObject<SocketContent>(Encoding.Unicode.GetString(data).Trim());
+            }catch(Exception ex)
+            {
+                Console.WriteLine(ex);
+                throw;
+            }
         }
 
         private SocketData _CreateSocketData(Socket socket, SocketContent content)
@@ -116,6 +130,26 @@ namespace UPnPChat.src
                 Socket = socket,
                 Content = content,
             };
+        }
+
+        private byte[] _ApplySendMiddleware(byte[] data)
+        {
+            foreach (var middleware in Middlewares)
+            {
+                data = middleware.Send(data);
+            }
+
+            return data;
+        }
+
+        private byte[] _ApplyReceiveMiddleware(byte[] data, int numBytesReceived)
+        {
+            foreach (var middleware in Middlewares)
+                {
+                    data = middleware.Receive(data, numBytesReceived);
+                }
+
+            return data;
         }
 
         protected Socket? __Listen()
@@ -270,12 +304,15 @@ namespace UPnPChat.src
         {
             try
             {
-                byte[] byteSend = _CreateObject(data);
-                int numBytesSend = socket.Send(byteSend);
+                byte[] bytesSend = _CreateObject(data);
+
+                bytesSend = _ApplySendMiddleware(bytesSend);
+
+                int numBytesSend = socket.Send(bytesSend);
 
                 if(OnSendSucceeded != null)
                 {
-                    OnSendSucceeded(byteSend, numBytesSend);
+                    OnSendSucceeded(bytesSend, numBytesSend);
                 }
             }
             catch (ObjectDisposedException ex)
@@ -296,6 +333,11 @@ namespace UPnPChat.src
                 {
                     OnSocketDisconnected(socket);
                 }
+            } 
+            catch(Exception ex)
+            {
+                Console.WriteLine(ex.ToString());
+                throw;
             }
         }
 
@@ -304,6 +346,9 @@ namespace UPnPChat.src
             try
             {
                 byte[] bytesSend = _CreateObject(data);
+
+                bytesSend = _ApplySendMiddleware(bytesSend);
+
                 int numBytesSend = await socket.SendAsync(bytesSend);
 
                 if (OnSendSucceeded != null)
@@ -329,12 +374,19 @@ namespace UPnPChat.src
                 {
                     OnSendFailed(socket, ex);
                 }
+            } 
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.ToString());
+                throw;
             }
         }
         protected void __Send(Socket socket, byte[] data)
         {
             try
             {
+                data = _ApplySendMiddleware(data);
+
                 int numBytesSend = socket.Send(data);
 
                 if (OnSendSucceeded != null)
@@ -360,6 +412,11 @@ namespace UPnPChat.src
                 {
                     OnSocketDisconnected(socket);
                 }
+            } 
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.ToString());
+                throw;
             }
         }
 
@@ -367,6 +424,8 @@ namespace UPnPChat.src
         {
             try
             {
+                data = _ApplySendMiddleware(data);
+
                 int numBytesSend = await socket.SendAsync(data);
 
                 if (OnSendSucceeded != null)
@@ -401,6 +460,8 @@ namespace UPnPChat.src
             {
                 byte[] bytesReceive = new byte[MaximumSocketBufferSize];
                 int numByteReceive = socket.Receive(bytesReceive);
+
+                bytesReceive = _ApplyReceiveMiddleware(bytesReceive, numByteReceive);
                 
                 SocketContent socketContent = _GetSocketContent(bytesReceive);
                 DataHandler handler = DataHandlers[socketContent.Annotation];
@@ -437,6 +498,11 @@ namespace UPnPChat.src
                     OnReceiveFailed(socket, ex);
                 }
             }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.ToString());
+                throw;
+            }
             return [];
         }
 
@@ -446,6 +512,8 @@ namespace UPnPChat.src
             {
                 byte[] bytesReceive = new byte[MaximumSocketBufferSize];
                 int numByteReceive = await socket.ReceiveAsync(bytesReceive);
+
+                bytesReceive = _ApplyReceiveMiddleware(bytesReceive, numByteReceive);
 
                 SocketContent socketContent = _GetSocketContent(bytesReceive);
                 DataHandler handler = DataHandlers[socketContent.Annotation];
@@ -481,7 +549,11 @@ namespace UPnPChat.src
                     OnReceiveFailed(socket, ex);
                 }
             }
-
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.ToString());
+                throw;
+            }
             return [];
         }
 

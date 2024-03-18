@@ -18,6 +18,11 @@ If you still decide to use it, be aware that UPnPChat author are not responsible
 - [x] Implement socket id
 - [x] Implement socket data session
 - [x] Implement one to one message
+- [x] Connect with a client on host mode instead of having only a host socket
+- [x] Implement middleware
+- [x] Implement AES encryption
+- [ ] Implement kick procedure
+- [ ] Implement moderation permissions
 - [ ] Implement UPnP protocol
 
 ## Bug
@@ -26,4 +31,5 @@ If you still decide to use it, be aware that UPnPChat author are not responsible
 
 ## Should be improve
 
-- [ ] RPC is working but it's kind of bad... Calling ServerRPC on the server side does not work, same the other way around. It is intended but should be better handled
+- [x] RPC is working but it's kind of bad... Calling ServerRPC on the server side does not work, same the other way around. It is intended but should be better handled
+	- Fixed : Connect with a client on host mode instead of having only a host socket
